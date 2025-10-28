@@ -1,0 +1,75 @@
+worker_processes 1;
+error_log /var/log/nginx/error.log warn;
+pid /var/run/nginx.pid;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 5;
+    types_hash_max_size 2048;
+
+    upstream app_upstream {
+        # Primary has low max_fails and short fail_timeout for quick detection
+        server ${PRIMARY_HOST}:3000 max_fails=1 fail_timeout=3s;
+        # Backup server - only used when primary fails
+        server ${BACKUP_HOST}:3000 backup;
+    }
+
+    server {
+        listen 80;
+
+        # General proxying settings used for all endpoints
+        proxy_buffering off;
+
+        location / {
+            proxy_pass http://app_upstream;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+
+            # Timeouts: keep requests short (<10s total)
+            proxy_connect_timeout 2s;
+            proxy_send_timeout 4s;
+            proxy_read_timeout 4s;
+
+            # Retry policy: try next upstream on errors, timeouts and 5xx
+            proxy_next_upstream error timeout http_502 http_503 http_504;
+            proxy_next_upstream_tries 2;
+        }
+
+        # Explicit endpoints (same behavior as /)
+        location /version {
+            proxy_pass http://app_upstream/version;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_connect_timeout 2s;
+            proxy_send_timeout 4s;
+            proxy_read_timeout 4s;
+            proxy_next_upstream error timeout http_502 http_503 http_504;
+            proxy_next_upstream_tries 2;
+        }
+
+        location /healthz {
+            proxy_pass http://app_upstream/healthz;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_connect_timeout 2s;
+            proxy_send_timeout 4s;
+            proxy_read_timeout 4s;
+            proxy_next_upstream error timeout http_502 http_503 http_504;
+            proxy_next_upstream_tries 2;
+        }
+
+    }
+}

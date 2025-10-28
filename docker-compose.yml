@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "${HOST_IP}:${PORT}:80"
+    volumes:
+      - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./nginx/entrypoint.sh:/entrypoint.sh:ro
+    command: ["/bin/sh", "/entrypoint.sh"]
+    depends_on:
+      - app_blue
+      - app_green
+    environment:
+      - ACTIVE_POOL=${ACTIVE_POOL}
+    networks:
+      - app_network
+
+  app_blue:
+    image: ${BLUE_IMAGE}
+    ports:
+      - "${HOST_IP}:8081:3000"
+    environment:
+      - RELEASE_ID=${RELEASE_ID_BLUE}
+      - APP_POOL=blue
+    networks:
+      - app_network
+
+  app_green:
+    image: ${GREEN_IMAGE}
+    ports:
+      - "${HOST_IP}:8082:3000"
+    environment:
+      - RELEASE_ID=${RELEASE_ID_GREEN}
+      - APP_POOL=green
+    networks:
+      - app_network
+
+networks:
+  app_network:
+    driver: bridge
