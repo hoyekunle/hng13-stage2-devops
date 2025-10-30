@@ -13,6 +13,15 @@ http {
     keepalive_timeout 5;
     types_hash_max_size 2048;
 
+    # Custom log format capturing upstream pool, release id and timing
+    log_format bng_main '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" "$http_user_agent" '
+                      'pool=$upstream_http_x_app_pool release=$upstream_http_x_release_id '
+                      'upstream_status=$upstream_status upstream_addr=$upstream_addr '
+                      'request_time=$request_time upstream_response_time=$upstream_response_time';
+
+    access_log /var/log/nginx/access.log bng_main;
+
     upstream app_upstream {
         # Primary has low max_fails and short fail_timeout for quick detection
         server ${PRIMARY_HOST}:3000 max_fails=1 fail_timeout=3s;
@@ -23,7 +32,7 @@ http {
     server {
         listen 80;
 
-        # General proxying settings used for all endpoints
+    # General proxying settings used for all endpoints
         proxy_buffering off;
 
         location / {
