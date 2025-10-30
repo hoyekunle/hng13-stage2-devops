@@ -5,9 +5,9 @@ blue/green routing with quick detection and automatic failover: Nginx routes to 
 default) and retries to the backup (green) on errors/timeouts so clients still receive successful responses.
 
 Quick facts
-- Nginx public entrypoint: http://54.205.198.118:8080 (mapped from `HOST_IP`/`PORT` in `.env`, default 54.205.198.118:8080)
-- Blue direct (for chaos control): http://54.205.198.118:8081 (host -> container 8081 -> 3000)
-- Green direct: http://54.205.198.118:8082
+ - Nginx public entrypoint: http://3.88.175.33:8080 (mapped from `HOST_IP`/`PORT` in `.env`, default 3.88.175.33:8080)
+ - Blue direct (for chaos control): http://3.88.175.33:8081 (host -> container 8081 -> 3000)
+ - Green direct: http://3.88.175.33:8082
 
 Prerequisites
 - Docker and Docker Compose installed on the host.
@@ -40,23 +40,23 @@ docker-compose up -d
 2. Baseline checks (should be routed to the active pool):
 
 ```bash
-curl -i http://54.205.198.118:8080/version     # main (via nginx)
-curl -i http://54.205.198.118:8081/version     # blue (direct)
-curl -i http://54.205.198.118:8082/version     # green (direct)
+curl -i http://3.88.175.33:8080/version     # main (via nginx)
+curl -i http://3.88.175.33:8081/version     # blue (direct)
+curl -i http://3.88.175.33:8082/version     # green (direct)
 ```
 
 Failover test (manual)
 1. Induce failure on the active (blue):
 
 ```bash
-curl -X POST "http://54.205.198.118:8081/chaos/start?mode=error"
+curl -X POST "http://3.88.175.33:8081/chaos/start?mode=error"
 ```
 
 2. Immediately poll the main endpoint and observe that responses become served by `green` (X-App-Pool: green):
 
 ```bash
 for i in {1..30}; do
-  curl -s -D - http://54.205.198.118:8080/version | sed -n '1,6p'
+  curl -s -D - http://3.88.175.33:8080/version | sed -n '1,6p'
   sleep 0.25
 done
 ```
@@ -64,7 +64,7 @@ done
 3. Stop chaos to restore blue:
 
 ```bash
-curl -X POST "http://54.205.198.118:8081/chaos/stop"
+curl -X POST "http://3.88.175.33:8081/chaos/stop"
 ```
 
 Notes about behavior and tuning
@@ -93,3 +93,57 @@ Troubleshooting
 
 Contact / Next steps
 - If you want, I can run a quick `docker-compose config` or start the stack and execute the failover loop and report observed headers and success rate.
+
+Operational visibility and alerts
+--------------------------------
+
+This project now includes an `alert_watcher` sidecar that tails Nginx access logs and posts actionable alerts to Slack.
+
+What is instrumented
+- Nginx access logs include: pool, release, upstream_status, upstream_addr, request_time, upstream_response_time.
+- A small Python watcher (`watcher/alert_watcher.py`) tails `/var/log/nginx/access.log`, detects pool flips and elevated 5xx error rates, and posts to Slack via `SLACK_WEBHOOK_URL`.
+
+Configuration (in `.env`)
+- `SLACK_WEBHOOK_URL` — incoming Slack webhook URL (required to send alerts).
+- `ERROR_RATE_THRESHOLD` — percentage (default 2) of 5xx responses over the sliding window that triggers an alert.
+- `WINDOW_SIZE` — number of most recent requests to consider (default 200).
+- `ALERT_COOLDOWN_SEC` — cooldown between repeated alerts of the same type (default 300s).
+- `MAINTENANCE_MODE` — set `true` to suppress alerts during planned maintenance.
+
+How alerts behave
+- Failover alert: posted once when the watcher observes the serving pool change (e.g., blue -> green). Cooldown prevents repeated alerts.
+- Error-rate alert: posted when the % of 5xx responses in the last `WINDOW_SIZE` requests exceeds `ERROR_RATE_THRESHOLD`.
+- Alerts are deduplicated using cooldown windows.
+
+Operator runbook (quick)
+- Failover detected:
+  1. Check the primary container logs: `docker-compose logs app_blue` (or app_green depending on which is primary).
+  2. Check `/version` and `/healthz` on the upstream containers directly (ports 8081/8082).
+  3. If the primary is unhealthy, keep the backup active and investigate the primary.
+
+- High error-rate detected:
+  1. Tail the Nginx logs: `tail -f logs/access.log` and inspect recent entries for `status` and `upstream_status`.
+  2. Check app containers' logs (blue/green) to find source of 5xx errors.
+  3. If needed, set `MAINTENANCE_MODE=true` in `.env` and restart `alert_watcher` to silence alerts while you remediate.
+
+- Recovery:
+  - When primary starts responding again and becomes the serving pool, a failover back to primary will be detected and an informational alert is posted.
+
+Maintenance mode
+- To suppress alerts during planned changes, set `MAINTENANCE_MODE=true` in `.env` and restart the watcher or recreate the `alert_watcher` service:
+
+```bash
+docker-compose up -d --no-deps --force-recreate alert_watcher
+```
+
+Testing alerts
+- Failover test: Run the chaos endpoint on the primary (`POST http://HOST:8081/chaos/start?mode=error`) and observe a Slack failover alert.
+- Error-rate test: Generate synthetic 5xx responses from an upstream (or flood the main endpoint with requests that cause 5xx) and observe the error-rate alert when threshold exceeded.
+
+Files added
+- `watcher/alert_watcher.py` — the log-tail/alerting logic.
+- `watcher/requirements.txt` — Python dependency file (`requests`).
+
+If you want, I can:
+- Start the stack here, run a failover drill, and show the watcher output and sample Slack payloads (requires Docker and a reachable Slack webhook), or
+- Tweak alert thresholds/cooldowns to match your grading criteria.
