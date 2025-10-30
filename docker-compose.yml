@@ -4,10 +4,11 @@ services:
   nginx:
     image: nginx:alpine
     ports:
-      - "${HOST_IP}:${PORT}:80"
+      - "${PORT}:80"
     volumes:
       - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
       - ./nginx/entrypoint.sh:/entrypoint.sh:ro
+      - ./logs:/var/log/nginx
     command: ["/bin/sh", "/entrypoint.sh"]
     depends_on:
       - app_blue
@@ -20,7 +21,7 @@ services:
   app_blue:
     image: ${BLUE_IMAGE}
     ports:
-      - "${HOST_IP}:8081:3000"
+      - "8081:3000"
     environment:
       - RELEASE_ID=${RELEASE_ID_BLUE}
       - APP_POOL=blue
@@ -30,12 +31,29 @@ services:
   app_green:
     image: ${GREEN_IMAGE}
     ports:
-      - "${HOST_IP}:8082:3000"
+      - "8082:3000"
     environment:
       - RELEASE_ID=${RELEASE_ID_GREEN}
       - APP_POOL=green
     networks:
       - app_network
+
+  alert_watcher:
+    image: python:3.11-slim
+    restart: unless-stopped
+    depends_on:
+      - nginx
+    environment:
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - ERROR_RATE_THRESHOLD=${ERROR_RATE_THRESHOLD}
+      - WINDOW_SIZE=${WINDOW_SIZE}
+      - ALERT_COOLDOWN_SEC=${ALERT_COOLDOWN_SEC}
+      - ACTIVE_POOL=${ACTIVE_POOL}
+      - MAINTENANCE_MODE=${MAINTENANCE_MODE}
+    volumes:
+      - ./watcher:/app:ro
+      - ./logs:/var/log/nginx:ro
+    command: ["/bin/sh", "-c", "pip install -r /app/requirements.txt >/dev/null 2>&1 || true; python /app/alert_watcher.py"]
 
 networks:
   app_network:
